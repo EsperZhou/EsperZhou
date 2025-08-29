@@ -1,9 +1,1 @@
 
-plt.figure(figsize=(12, 6))
-plt.plot(quarters, values, 'o-', linewidth=2, markersize=8)
-plt.title('CO CC - Weighted FLI Performance Sum')
-plt.xlabel('Quarter')
-plt.ylabel('Weighted FLI Performance Sum')
-plt.grid(True)
-plt.xticks(rotation=45)
-plt.show()
