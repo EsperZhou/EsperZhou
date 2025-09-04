@@ -1,144 +1,78 @@
-# First, create the mapping dataframes as before
-def create_portfolio_mapping_df(product_map_list):
-    mapping_data = []
-    for key, values in product_map_list.items():
-        for value in values:
-            mapping_data.append({'template_portfolio': value, 'source_portfolio': key})
-    return pd.DataFrame(mapping_data)
+# Create the mapping columns using map function
+template_actual['Metric_Map'] = template_actual['Metric'].map(metric_map_list)
+template_actual['Product_Map'] = template_actual['Asset Class/Product Type'].map(product_map_list)
 
-def create_metric_mapping_df(metric_map_list):
-    mapping_data = []
-    for key, value in metric_map_list.items():
-        mapping_data.append({'template_metric': value, 'source_metric': key})
-    return pd.DataFrame(mapping_data)
-
-portfolio_mapping = create_portfolio_mapping_df(product_map_list)
-metric_mapping = create_metric_mapping_df(metric_map_list)
-
-# Initialize SY0Q1-Q4 columns with 0 for all rows
+# Initialize all SY0 columns with 0
 template_actual['SY0 Q1'] = 0
 template_actual['SY0 Q2'] = 0
 template_actual['SY0 Q3'] = 0
 template_actual['SY0 Q4'] = 0
 
-# Function to identify which metrics are mappable
-def get_mappable_metrics(template_df, metric_mapping):
-    """Get list of metrics that can be mapped"""
-    mappable_metrics = set(metric_mapping['template_metric'].tolist())
-    # Add Provision for Credit Losses metrics (they have special handling)
-    provision_metrics = template_df[template_df['Metric'].str.contains('Provision for Credit Losses', na=False)]['Metric'].unique()
-    mappable_metrics.update(provision_metrics)
-    return mappable_metrics
-
-# Get mappable metrics
-mappable_metrics = get_mappable_metrics(template_actual, metric_mapping)
-
-# Function to merge quarter data only for mappable metrics
-def merge_quarter_data_selective(template_df, source_df, quarter_col, portfolio_mapping, metric_mapping, mappable_metrics):
-    """Merge data only for metrics that exist in mapping"""
-    
-    # Filter template to only mappable metrics (excluding provisions)
-    regular_mappable = template_df[
-        (template_df['Metric'].isin(mappable_metrics)) & 
-        (~template_df['Metric'].str.contains('Provision for Credit Losses', na=False))
-    ].copy()
-    
-    if regular_mappable.empty:
-        return template_df
-    
-    # Add mappings
-    temp_with_mapping = regular_mappable.merge(
-        portfolio_mapping, 
-        left_on='Asset Class/Product Type', 
-        right_on='template_portfolio', 
-        how='left'
-    ).merge(
-        metric_mapping,
-        left_on='Metric',
-        right_on='template_metric',
-        how='left'
-    )
-    
-    # Merge with source data
-    merged = temp_with_mapping.merge(
-        source_df[['Portfolio', 'Metric', 'Q1 2024']],  # Adjust column name as needed
-        left_on=['source_portfolio', 'source_metric'],
+# Function to merge and fill quarter data
+def fill_quarter_simple(template_df, source_df, quarter_col, source_value_col='Q1 2024'):
+    """Simple merge to fill quarter data"""
+    # Merge on mapped values
+    merged = template_df.merge(
+        source_df[['Portfolio', 'Metric', source_value_col]],
+        left_on=['Product_Map', 'Metric_Map'],
         right_on=['Portfolio', 'Metric'],
         how='left'
     )
     
-    # Update only the successfully mapped rows
-    for idx, row in merged.iterrows():
-        if pd.notna(row['Q1 2024']):  # Only update if we got a value
-            template_df.at[idx, quarter_col] = row['Q1 2024']
+    # Fill the quarter column where we have matches (non-null values)
+    template_df.loc[merged[source_value_col].notna(), quarter_col] = merged.loc[merged[source_value_col].notna(), source_value_col]
     
     return template_df
 
-# Function for provision data with selective updating
-def merge_provision_data_selective(template_df, df_current, df_previous, quarter_col, portfolio_mapping):
-    """Handle provisions only for mappable portfolios"""
-    
-    provision_mapping = pd.DataFrame([
-        {'template_metric': 'Provision for Credit Losses (S1)', 'source_metric': 'Stage 1 ECL / ACL Individually Assessed'},
-        {'template_metric': 'Provision for Credit Losses (S2)', 'source_metric': 'Stage 2 ECL / ACL Collectively Assessed for Insignificant Impaired Assets'}
-    ])
+# Fill regular quarters
+template_actual = fill_quarter_simple(template_actual, df2024q1, 'SY0 Q1')
+template_actual = fill_quarter_simple(template_actual, df2024q3, 'SY0 Q3')
+template_actual = fill_quarter_simple(template_actual, df2024q4, 'SY0 Q4')
+
+# Special handling for provisions in Q2 and Q3
+def fill_provision_simple(template_df, df_current, df_previous, quarter_col):
+    """Handle provision differences"""
+    # Create provision mapping
+    provision_map = {
+        'Provision for Credit Losses (S1)': 'Stage 1 ECL / ACL Individually Assessed',
+        'Provision for Credit Losses (S2)': 'Stage 2 ECL / ACL Collectively Assessed for Insignificant Impaired Assets'
+    }
     
     # Get provision rows
     provision_mask = template_df['Metric'].str.contains('Provision for Credit Losses', na=False)
-    provision_template = template_df[provision_mask].copy()
     
-    if not provision_template.empty:
-        # Add mappings
-        provision_with_mapping = provision_template.merge(
-            portfolio_mapping,
-            left_on='Asset Class/Product Type',
-            right_on='template_portfolio',
-            how='left'
-        ).merge(
-            provision_mapping,
-            left_on='Metric',
-            right_on='template_metric',
-            how='left'
-        )
+    for idx in template_df[provision_mask].index:
+        metric = template_df.at[idx, 'Metric']
+        portfolio = template_df.at[idx, 'Product_Map']
         
-        # Merge with current and previous data
-        current_data = provision_with_mapping.merge(
-            df_current[['Portfolio', 'Metric', 'Q1 2024']],
-            left_on=['source_portfolio', 'source_metric'],
-            right_on=['Portfolio', 'Metric'],
-            how='left',
-            suffixes=('', '_current')
-        )
-        
-        final_data = current_data.merge(
-            df_previous[['Portfolio', 'Metric', 'Q1 2024']],
-            left_on=['source_portfolio', 'source_metric'],
-            right_on=['Portfolio', 'Metric'],
-            how='left',
-            suffixes=('_current', '_previous')
-        )
-        
-        # Calculate differences and update only successful matches
-        for idx, row in final_data.iterrows():
-            if pd.notna(row['Q1 2024_current']) and pd.notna(row['Q1 2024_previous']):
-                difference = row['Q1 2024_current'] - row['Q1 2024_previous']
+        if metric in provision_map and pd.notna(portfolio):
+            target_metric = provision_map[metric]
+            
+            # Get current and previous values
+            current_val = df_current[
+                (df_current['Portfolio'] == portfolio) & 
+                (df_current['Metric'] == target_metric)
+            ]['Q1 2024'].values
+            
+            previous_val = df_previous[
+                (df_previous['Portfolio'] == portfolio) & 
+                (df_previous['Metric'] == target_metric)
+            ]['Q1 2024'].values
+            
+            if len(current_val) > 0 and len(previous_val) > 0:
+                difference = current_val[0] - previous_val[0]
                 template_df.at[idx, quarter_col] = difference
     
     return template_df
 
-# Fill quarters - only mappable metrics get non-zero values
-template_actual = merge_quarter_data_selective(template_actual, df2024q1, 'SY0 Q1', portfolio_mapping, metric_mapping, mappable_metrics)
-template_actual = merge_quarter_data_selective(template_actual, df2024q3, 'SY0 Q3', portfolio_mapping, metric_mapping, mappable_metrics)
-template_actual = merge_quarter_data_selective(template_actual, df2024q4, 'SY0 Q4', portfolio_mapping, metric_mapping, mappable_metrics)
+# Fill Q2 and Q3 with provision logic
+template_actual = fill_quarter_simple(template_actual, df2024q2, 'SY0 Q2')  # Regular metrics
+template_actual = fill_provision_simple(template_actual, df2024q2, df2024q1, 'SY0 Q2')  # Provisions
 
-# Handle provisions for Q2 and Q3
-template_actual = merge_provision_data_selective(template_actual, df2024q2, df2024q1, 'SY0 Q2', portfolio_mapping)
-template_actual = merge_provision_data_selective(template_actual, df2024q3, df2024q2, 'SY0 Q3', portfolio_mapping)
+# For Q3, update provisions with Q3-Q2 difference
+template_actual = fill_provision_simple(template_actual, df2024q3, df2024q2, 'SY0 Q3')  # Provisions
 
-# Verify results
-print("Metrics with non-zero values:")
-non_zero_mask = (template_actual[['SY0 Q1', 'SY0 Q2', 'SY0 Q3', 'SY0 Q4']] != 0).any(axis=1)
-print(template_actual[non_zero_mask][['Metric', 'Asset Class/Product Type', 'SY0 Q1', 'SY0 Q2', 'SY0 Q3', 'SY0 Q4']].head(10))
-
-print(f"\nTotal rows with non-zero values: {non_zero_mask.sum()}")
-print(f"Total rows with all zeros: {(~non_zero_mask).sum()}")
+# Check results
+print("Non-zero values:")
+mask = (template_actual[['SY0 Q1', 'SY0 Q2', 'SY0 Q3', 'SY0 Q4']] != 0).any(axis=1)
+print(template_actual[mask][['Metric', 'Asset Class/Product Type', 'SY0 Q1', 'SY0 Q2', 'SY0 Q3', 'SY0 Q4']].head())
