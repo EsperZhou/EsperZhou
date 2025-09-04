@@ -8,15 +8,6 @@ template_actual['SY0 Q2'] = 0
 template_actual['SY0 Q3'] = 0
 template_actual['SY0 Q4'] = 0
 
-# Create provision mapping for merging
-provision_map = {
-    'Provision for Credit Losses (S1)': 'Stage 1 ECL / ACL Individually Assessed',
-    'Provision for Credit Losses (S2)': 'Stage 2 ECL / ACL Collectively Assessed for Insignificant Impaired Assets'
-}
-
-# Map provision metrics
-template_actual['Provision_Map'] = template_actual['Metric'].map(provision_map)
-
 # Merge all quarters data at once
 merged_data = template_actual.merge(
     df2024q1[['Portfolio', 'Metric', 'Q1 2024']].rename(columns={'Q1 2024': 'Q1_val'}),
@@ -24,62 +15,46 @@ merged_data = template_actual.merge(
     right_on=['Portfolio', 'Metric'], 
     how='left'
 ).merge(
-    df2024q2[['Portfolio', 'Metric', 'Q2 2024']].rename(columns={'Q2 2024': 'Q2_val'}),  # Adjust column name
+    df2024q2[['Portfolio', 'Metric', 'Q2 2024']].rename(columns={'Q2 2024': 'Q2_val'}),
     left_on=['Product_Map', 'Metric_Map'], 
     right_on=['Portfolio', 'Metric'], 
     how='left'
 ).merge(
-    df2024q3[['Portfolio', 'Metric', 'Q3 2024']].rename(columns={'Q3 2024': 'Q3_val'}),  # Adjust column name
+    df2024q3[['Portfolio', 'Metric', 'Q3 2024']].rename(columns={'Q3 2024': 'Q3_val'}),
     left_on=['Product_Map', 'Metric_Map'], 
     right_on=['Portfolio', 'Metric'], 
     how='left'
 ).merge(
-    df2024q4[['Portfolio', 'Metric', 'Q4 2024']].rename(columns={'Q4 2024': 'Q4_val'}),  # Adjust column name
+    df2024q4[['Portfolio', 'Metric', 'Q4 2024']].rename(columns={'Q4 2024': 'Q4_val'}),
     left_on=['Product_Map', 'Metric_Map'], 
     right_on=['Portfolio', 'Metric'], 
     how='left'
 )
 
-# Also merge provision data
-provision_merged = template_actual.merge(
-    df2024q1[['Portfolio', 'Metric', 'Q1 2024']].rename(columns={'Q1 2024': 'Prov_Q1'}),
-    left_on=['Product_Map', 'Provision_Map'], 
-    right_on=['Portfolio', 'Metric'], 
-    how='left'
-).merge(
-    df2024q2[['Portfolio', 'Metric', 'Q2 2024']].rename(columns={'Q2 2024': 'Prov_Q2'}),
-    left_on=['Product_Map', 'Provision_Map'], 
-    right_on=['Portfolio', 'Metric'], 
-    how='left'
-).merge(
-    df2024q3[['Portfolio', 'Metric', 'Q3 2024']].rename(columns={'Q3 2024': 'Prov_Q3'}),
-    left_on=['Product_Map', 'Provision_Map'], 
-    right_on=['Portfolio', 'Metric'], 
-    how='left'
-)
-
-# Fill SY0 Q1 - regular metrics
+# Fill SY0 Q1 - direct values
 template_actual.loc[merged_data['Q1_val'].notna(), 'SY0 Q1'] = merged_data.loc[merged_data['Q1_val'].notna(), 'Q1_val']
 
-# Fill SY0 Q2 - regular metrics + provision differences (Q2 - Q1)
-template_actual.loc[merged_data['Q2_val'].notna(), 'SY0 Q2'] = merged_data.loc[merged_data['Q2_val'].notna(), 'Q2_val']
-# Provision differences for Q2
-provision_mask = template_actual['Provision_Map'].notna()
-template_actual.loc[provision_mask & provision_merged['Prov_Q2'].notna() & provision_merged['Prov_Q1'].notna(), 'SY0 Q2'] = \
-    provision_merged.loc[provision_mask & provision_merged['Prov_Q2'].notna() & provision_merged['Prov_Q1'].notna(), 'Prov_Q2'] - \
-    provision_merged.loc[provision_mask & provision_merged['Prov_Q2'].notna() & provision_merged['Prov_Q1'].notna(), 'Prov_Q1']
+# Fill SY0 Q2 - for provisions use difference (Q2 - Q1), for others use direct Q2 values
+provision_mask = template_actual['Metric'].str.contains('Provision for Credit Losses', na=False)
+# Regular metrics: direct Q2 values
+template_actual.loc[~provision_mask & merged_data['Q2_val'].notna(), 'SY0 Q2'] = merged_data.loc[~provision_mask & merged_data['Q2_val'].notna(), 'Q2_val']
+# Provisions: Q2 - Q1 difference
+template_actual.loc[provision_mask & merged_data['Q2_val'].notna() & merged_data['Q1_val'].notna(), 'SY0 Q2'] = \
+    merged_data.loc[provision_mask & merged_data['Q2_val'].notna() & merged_data['Q1_val'].notna(), 'Q2_val'] - \
+    merged_data.loc[provision_mask & merged_data['Q2_val'].notna() & merged_data['Q1_val'].notna(), 'Q1_val']
 
-# Fill SY0 Q3 - regular metrics + provision differences (Q3 - Q2)
-template_actual.loc[merged_data['Q3_val'].notna(), 'SY0 Q3'] = merged_data.loc[merged_data['Q3_val'].notna(), 'Q3_val']
-# Provision differences for Q3
-template_actual.loc[provision_mask & provision_merged['Prov_Q3'].notna() & provision_merged['Prov_Q2'].notna(), 'SY0 Q3'] = \
-    provision_merged.loc[provision_mask & provision_merged['Prov_Q3'].notna() & provision_merged['Prov_Q2'].notna(), 'Prov_Q3'] - \
-    provision_merged.loc[provision_mask & provision_merged['Prov_Q3'].notna() & provision_merged['Prov_Q2'].notna(), 'Prov_Q2']
+# Fill SY0 Q3 - for provisions use difference (Q3 - Q2), for others use direct Q3 values
+# Regular metrics: direct Q3 values
+template_actual.loc[~provision_mask & merged_data['Q3_val'].notna(), 'SY0 Q3'] = merged_data.loc[~provision_mask & merged_data['Q3_val'].notna(), 'Q3_val']
+# Provisions: Q3 - Q2 difference
+template_actual.loc[provision_mask & merged_data['Q3_val'].notna() & merged_data['Q2_val'].notna(), 'SY0 Q3'] = \
+    merged_data.loc[provision_mask & merged_data['Q3_val'].notna() & merged_data['Q2_val'].notna(), 'Q3_val'] - \
+    merged_data.loc[provision_mask & merged_data['Q3_val'].notna() & merged_data['Q2_val'].notna(), 'Q2_val']
 
-# Fill SY0 Q4 - regular metrics
+# Fill SY0 Q4 - direct values
 template_actual.loc[merged_data['Q4_val'].notna(), 'SY0 Q4'] = merged_data.loc[merged_data['Q4_val'].notna(), 'Q4_val']
 
 # Check results
-print("Non-zero values:")
+print("Filled template:")
 mask = (template_actual[['SY0 Q1', 'SY0 Q2', 'SY0 Q3', 'SY0 Q4']] != 0).any(axis=1)
 print(template_actual[mask][['Metric', 'Asset Class/Product Type', 'SY0 Q1', 'SY0 Q2', 'SY0 Q3', 'SY0 Q4']].head())
