@@ -1,167 +1,25 @@
-# Keep your existing code up to the merge section, then modify the merge logic:
+# Keep ALL your existing code exactly as is, then add just this at the end:
 
-# Your existing code (keep as is)
-df2024q1 = pd.read_excel('AE_OSF1946_CRD_Retail_Data_Call_Q1_2024.xlsx', sheet_name='Consumer - Other Intl', header=5)
-df2024q2 = pd.read_excel('AE_OSF1946_CRD_Retail_Data_Call_Q2_2024.xlsx', sheet_name='Consumer - Other Intl', header=5)
-df2024q3 = pd.read_excel('AE_OSF1946_CRD_Retail_Data_Call_Q3_2024.xlsx', sheet_name='Consumer - Other Intl', header=5)
-df2024q4 = pd.read_excel('AE_OSF1946_CRD_Retail_Data_Call_Q4_2024.xlsx', sheet_name='Consumer - Other Intl', header=5)
+# Simple fix: Just override "Other Consumer" rows with aggregated values
+other_consumer_mask = template_actual['Asset Class/Product Type'] == 'Other Consumer'
 
-template = pd.read_excel('sche3_1br_dry_run_template.xlsx')
-template_actual = template.loc[:,'SY0 Q4'].drop(columns='EST Note')
-
-# Create the mapping columns using map function (keep as is)
-template_actual['Metric_Map'] = template_actual['Metric'].map(metric_map_list)
-template_actual['Product_Map'] = template_actual['Asset Class/Product Type'].map(product_map_list)
-
-# Initialize all SY0 columns with 0 (keep as is)
-template_actual['SY0 Q1'] = 0
-template_actual['SY0 Q2'] = 0
-template_actual['SY0 Q3'] = 0
-template_actual['SY0 Q4'] = 0
-
-# MODIFIED: Replace your merge section with this enhanced version
-def merge_with_product_aggregation(template_df, source_df, quarter_col, source_value_col='Q1 2024'):
-    """Enhanced merge that handles both single and multiple product mappings"""
+for idx in template_actual[other_consumer_mask].index:
+    metric_map = template_actual.at[idx, 'Metric_Map']
     
-    # Create a copy of merged_data for this quarter
-    merged_data = template_df.copy()
-    
-    # Add a column to track aggregated values
-    merged_data[f'{quarter_col}_aggregated'] = 0
-    merged_data[f'{quarter_col}_found'] = False
-    
-    for idx, row in merged_data.iterrows():
-        product_map = row['Product_Map']
-        metric_map = row['Metric_Map']
-        
-        if pd.isna(metric_map) or pd.isna(product_map):
-            continue
-        
-        # Handle single product mapping (your existing logic)
-        if isinstance(product_map, str):
-            # Single product - use existing merge logic
-            mask = (source_df['Portfolio'] == product_map) & (source_df['Metric'] == metric_map)
-            matching_rows = source_df[mask]
+    if pd.notna(metric_map):
+        # For each quarter, sum "Other Consumer" + "Small Business"
+        for quarter_df, col_name in [
+            (df2024q1, 'SY0 Q1'),
+            (df2024q2, 'SY0 Q2'),
+            (df2024q3, 'SY0 Q3'), 
+            (df2024q4, 'SY0 Q4')
+        ]:
+            oc_val = quarter_df[(quarter_df['Portfolio'] == 'Other Consumer') & 
+                               (quarter_df['Metric'] == metric_map)]['Q1 2024'].sum()  # Adjust column name
+            sb_val = quarter_df[(quarter_df['Portfolio'] == 'Small Business') & 
+                               (quarter_df['Metric'] == metric_map)]['Q1 2024'].sum()  # Adjust column name
             
-            if not matching_rows.empty and pd.notna(matching_rows.iloc[0][source_value_col]):
-                merged_data.at[idx, f'{quarter_col}_aggregated'] = matching_rows.iloc[0][source_value_col]
-                merged_data.at[idx, f'{quarter_col}_found'] = True
-        
-        # Handle multiple product mapping (new for "Other Consumer")
-        elif isinstance(product_map, list):
-            total_value = 0
-            found_any = False
-            
-            for single_product in product_map:
-                mask = (source_df['Portfolio'] == single_product) & (source_df['Metric'] == metric_map)
-                matching_rows = source_df[mask]
-                
-                if not matching_rows.empty and pd.notna(matching_rows.iloc[0][source_value_col]):
-                    total_value += matching_rows.iloc[0][source_value_col]
-                    found_any = True
-            
-            if found_any:
-                merged_data.at[idx, f'{quarter_col}_aggregated'] = total_value
-                merged_data.at[idx, f'{quarter_col}_found'] = True
-    
-    # Update the template with found values
-    mask_found = merged_data[f'{quarter_col}_found']
-    template_df.loc[mask_found, quarter_col] = merged_data.loc[mask_found, f'{quarter_col}_aggregated']
-    
-    return template_df
+            if oc_val > 0 or sb_val > 0:
+                template_actual.at[idx, col_name] = oc_val + sb_val
 
-# MODIFIED: Update your product_map_list to handle lists
-# Change your JSON config to have lists for products that need aggregation:
-# "Other Consumer": ["Other Consumer", "Personal Instalment Loans"]
-
-# OR modify the mapping in code:
-def prepare_product_mapping(template_df, product_map_list):
-    """Prepare product mapping to handle aggregation"""
-    mapping_result = []
-    
-    for template_product in template_df['Asset Class/Product Type']:
-        found_mapping = None
-        
-        for source_product, template_products in product_map_list.items():
-            if isinstance(template_products, list):
-                if template_product in template_products:
-                    # Check if this template product should aggregate multiple sources
-                    if template_product == "Other Consumer":
-                        # Special case: aggregate both "Other Consumer" and "Small Business"
-                        found_mapping = ["Other Consumer", "Small Business"]
-                    else:
-                        found_mapping = source_product
-                    break
-            else:
-                if template_product == template_products:
-                    found_mapping = source_product
-                    break
-        
-        mapping_result.append(found_mapping)
-    
-    return mapping_result
-
-# Apply the enhanced product mapping
-template_actual['Product_Map'] = prepare_product_mapping(template_actual, product_map_list)
-
-# Use your existing structure but with the enhanced merge function
-# Fill SY0 Q1 - direct values
-template_actual = merge_with_product_aggregation(template_actual, df2024q1, 'SY0 Q1', 'Q1 2024')
-
-# Fill SY0 Q2 - for provisions use difference (Q2 - Q1), for others use direct Q2 values
-provision_mask = template_actual['Metric'].str.contains('Provision for Credit Losses', na=False)
-
-# Regular metrics: direct Q2 values
-template_actual = merge_with_product_aggregation(template_actual, df2024q2, 'SY0 Q2', 'Q2 2024')
-
-# MODIFIED: Provisions with aggregation support
-for idx in template_actual[provision_mask].index:
-    product_map = template_actual.at[idx, 'Product_Map']
-    metric = template_actual.at[idx, 'Metric']
-    
-    if '(S1)' in metric:
-        target_metric = 'Stage 1 ECL / ACL Individually Assessed'
-    elif '(S2)' in metric:
-        target_metric = 'Stage 2 ECL / ACL Collectively Assessed for Insignificant Impaired Assets'
-    else:
-        continue
-    
-    if pd.isna(product_map):
-        continue
-    
-    # Handle single or multiple products for provisions
-    products_to_check = [product_map] if isinstance(product_map, str) else product_map
-    
-    total_q2 = 0
-    total_q1 = 0
-    found_both = True
-    
-    for product in products_to_check:
-        # Q2 value
-        q2_mask = (df2024q2['Portfolio'] == product) & (df2024q2['Metric'] == target_metric)
-        q2_rows = df2024q2[q2_mask]
-        
-        # Q1 value  
-        q1_mask = (df2024q1['Portfolio'] == product) & (df2024q1['Metric'] == target_metric)
-        q1_rows = df2024q1[q1_mask]
-        
-        if not q2_rows.empty and not q1_rows.empty:
-            total_q2 += q2_rows.iloc[0]['Q2 2024']  # Adjust column name
-            total_q1 += q1_rows.iloc[0]['Q1 2024']  # Adjust column name
-        else:
-            found_both = False
-            break
-    
-    if found_both:
-        template_actual.at[idx, 'SY0 Q2'] = total_q2 - total_q1
-
-# Continue with Q3 and Q4 using the same pattern...
-template_actual = merge_with_product_aggregation(template_actual, df2024q3, 'SY0 Q3', 'Q3 2024')
-# Apply Q3 provision logic...
-
-template_actual = merge_with_product_aggregation(template_actual, df2024q4, 'SY0 Q4', 'Q4 2024')
-
-# Keep your existing result checking code
-print("Filled template:")
-mask = (template_actual[['SY0 Q1', 'SY0 Q2', 'SY0 Q3', 'SY0 Q4']] != 0).any(axis=1)
-print(template_actual[mask][['Metric', 'Asset Class/Product Type', 'SY0 Q1', 'SY0 Q2', 'SY0 Q3', 'SY0 Q4']].head())
+print("✅ Other Consumer aggregation complete!")
