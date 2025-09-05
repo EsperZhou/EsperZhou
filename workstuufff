@@ -1,25 +1,20 @@
-# Keep ALL your existing code exactly as is, then add just this at the end:
-
-# Simple fix: Just override "Other Consumer" rows with aggregated values
-other_consumer_mask = template_actual['Asset Class/Product Type'] == 'Other Consumer'
-
-for idx in template_actual[other_consumer_mask].index:
-    metric_map = template_actual.at[idx, 'Metric_Map']
+# Around your merge section, add this logic:
+for quarter in ['Q1_val', 'Q2_val', 'Q3_val', 'Q4_val']:  # adjust column names as needed
+    provision_mask = template_actual['Metric'].str.contains('Provision for Credit Losses')
     
-    if pd.notna(metric_map):
-        # For each quarter, sum "Other Consumer" + "Small Business"
-        for quarter_df, col_name in [
-            (df2024q1, 'SY0 Q1'),
-            (df2024q2, 'SY0 Q2'),
-            (df2024q3, 'SY0 Q3'), 
-            (df2024q4, 'SY0 Q4')
-        ]:
-            oc_val = quarter_df[(quarter_df['Portfolio'] == 'Other Consumer') & 
-                               (quarter_df['Metric'] == metric_map)]['Q1 2024'].sum()  # Adjust column name
-            sb_val = quarter_df[(quarter_df['Portfolio'] == 'Small Business') & 
-                               (quarter_df['Metric'] == metric_map)]['Q1 2024'].sum()  # Adjust column name
+    for idx in template_actual[provision_mask].index:
+        product_type = template_actual.loc[idx, 'Asset Class/Product Type']
+        
+        # Check if "Other Consumer" needs to be summed
+        if product_type == "Other Consumer":
+            other_consumer_val = merged_data[
+                (merged_data['Product_Map'] == 'Other Consumer') & 
+                (merged_data['Metric'] == template_actual.loc[idx, 'Metric'])
+            ][quarter].sum() if not merged_data[...].empty else 0
             
-            if oc_val > 0 or sb_val > 0:
-                template_actual.at[idx, col_name] = oc_val + sb_val
-
-print("✅ Other Consumer aggregation complete!")
+            personal_loans_val = merged_data[
+                (merged_data['Product_Map'] == 'Personal Instalment Loans') & 
+                (merged_data['Metric'] == template_actual.loc[idx, 'Metric'])
+            ][quarter].sum() if not merged_data[...].empty else 0
+            
+            template_actual.loc[idx, quarter] = other_consumer_val + personal_loans_val
