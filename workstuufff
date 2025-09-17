@@ -1,1 +1,68 @@
 
+import pandas as pd
+import numpy as np
+
+def compare_columns(df1, df2):
+    """Compare DataFrames column by column, handling lists properly."""
+    results = {}
+    
+    # Get all columns from both dataframes
+    all_cols = set(df1.columns) | set(df2.columns)
+    
+    for col in all_cols:
+        if col not in df1.columns or col not in df2.columns:
+            results[col] = False
+        else:
+            results[col] = columns_equal(df1[col], df2[col])
+    
+    return results
+
+def columns_equal(s1, s2):
+    """Check if two Series are equal, handling lists."""
+    if len(s1) != len(s2) or not s1.index.equals(s2.index):
+        return False
+    
+    for i in s1.index:
+        if not values_equal(s1[i], s2[i]):
+            return False
+    return True
+
+def values_equal(v1, v2):
+    """Compare two values, handling lists and NaN."""
+    # Handle NaN
+    if pd.isna(v1) and pd.isna(v2):
+        return True
+    if pd.isna(v1) or pd.isna(v2):
+        return False
+    
+    # Handle lists
+    if isinstance(v1, list) and isinstance(v2, list):
+        if len(v1) != len(v2):
+            return False
+        return all(values_equal(a, b) for a, b in zip(v1, v2))
+    
+    # Regular comparison
+    return v1 == v2
+
+# Usage examples:
+if __name__ == "__main__":
+    # Example DataFrames
+    df1 = pd.DataFrame({
+        'A': [1, 2, 3],
+        'B': ['x', 'y', 'z'], 
+        'C': [[1,2], [3,4], [5,6]]
+    })
+    
+    df2 = pd.DataFrame({
+        'A': [1, 2, 3],
+        'B': ['x', 'y', 'z'],
+        'C': [[1,2], [3,4], [5,6]]
+    })
+    
+    # Compare columns
+    result = compare_columns(df1, df2)
+    print(result)  # {'A': True, 'B': True, 'C': True}
+    
+    # Check if all columns are equal
+    all_equal = all(result.values())
+    print(f"All columns equal: {all_equal}")
