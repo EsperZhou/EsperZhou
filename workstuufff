@@ -1,20 +1,140 @@
-# Around your merge section, add this logic:
-for quarter in ['Q1_val', 'Q2_val', 'Q3_val', 'Q4_val']:  # adjust column names as needed
-    provision_mask = template_actual['Metric'].str.contains('Provision for Credit Losses')
+import pandas as pd
+import numpy as np
+
+def compare_dataframes(vpd_file, spd_file):
+    """
+    Compare two dataframes with the same structure
+    focusing on columns fli_pd_q0 to fli_pd_q12
+    """
     
-    for idx in template_actual[provision_mask].index:
-        product_type = template_actual.loc[idx, 'Asset Class/Product Type']
+    # Load the dataframes
+    print("Loading data...")
+    vpd_df = pd.read_csv(vpd_file)
+    spd_df = pd.read_csv(spd_file)
+    
+    print(f"VPD shape: {vpd_df.shape}")
+    print(f"SPD shape: {spd_df.shape}")
+    
+    # Get all columns that start with 'fli_pd_q'
+    fli_columns = [col for col in vpd_df.columns if col.startswith('fli_pd_q')]
+    fli_columns.sort()  # Sort to get q0, q1, q2, etc. in order
+    
+    print(f"Found {len(fli_columns)} fli_pd_q columns: {fli_columns}")
+    
+    # Check if both dataframes have the same columns
+    vpd_fli_cols = set([col for col in vpd_df.columns if col.startswith('fli_pd_q')])
+    spd_fli_cols = set([col for col in spd_df.columns if col.startswith('fli_pd_q')])
+    
+    if vpd_fli_cols != spd_fli_cols:
+        print("WARNING: Different fli_pd_q columns found!")
+        print(f"VPD only: {vpd_fli_cols - spd_fli_cols}")
+        print(f"SPD only: {spd_fli_cols - vpd_fli_cols}")
+    
+    # Compare the dataframes
+    print("\n" + "="*50)
+    print("COMPARISON RESULTS")
+    print("="*50)
+    
+    results = {}
+    
+    for col in fli_columns:
+        if col in vpd_df.columns and col in spd_df.columns:
+            vpd_values = vpd_df[col]
+            spd_values = spd_df[col]
+            
+            # Compare values
+            matches = (vpd_values == spd_values)
+            total_rows = len(vpd_values)
+            matching_rows = matches.sum()
+            different_rows = total_rows - matching_rows
+            
+            results[col] = {
+                'total_rows': total_rows,
+                'matching_rows': matching_rows,
+                'different_rows': different_rows,
+                'match_percentage': (matching_rows / total_rows) * 100
+            }
+            
+            print(f"\n{col}:")
+            print(f"  Total rows: {total_rows}")
+            print(f"  Matching: {matching_rows} ({results[col]['match_percentage']:.1f}%)")
+            print(f"  Different: {different_rows}")
+            
+            # Show some examples of differences
+            if different_rows > 0:
+                diff_indices = vpd_values[~matches].index[:5]  # Show first 5 differences
+                print(f"  Example differences (first 5):")
+                for idx in diff_indices:
+                    print(f"    Row {idx}: VPD={vpd_values.iloc[idx]}, SPD={spd_values.iloc[idx]}")
+    
+    # Overall summary
+    print(f"\n" + "="*50)
+    print("OVERALL SUMMARY")
+    print("="*50)
+    
+    total_comparisons = sum(r['total_rows'] for r in results.values())
+    total_matches = sum(r['matching_rows'] for r in results.values())
+    
+    print(f"Total comparisons: {total_comparisons}")
+    print(f"Total matches: {total_matches}")
+    print(f"Total differences: {total_comparisons - total_matches}")
+    print(f"Overall match rate: {(total_matches/total_comparisons)*100:.2f}%")
+    
+    # Create a summary dataframe
+    summary_df = pd.DataFrame(results).T
+    summary_df.index.name = 'Column'
+    
+    print(f"\nSummary table:")
+    print(summary_df)
+    
+    return results, summary_df
+
+def find_specific_differences(vpd_file, spd_file, column_name):
+    """
+    Find all specific differences for a particular column
+    """
+    vpd_df = pd.read_csv(vpd_file)
+    spd_df = pd.read_csv(spd_file)
+    
+    if column_name not in vpd_df.columns or column_name not in spd_df.columns:
+        print(f"Column {column_name} not found in one or both dataframes")
+        return
+    
+    vpd_values = vpd_df[column_name]
+    spd_values = spd_df[column_name]
+    
+    # Find all differences
+    differences = vpd_values != spd_values
+    diff_df = pd.DataFrame({
+        'Row_Index': vpd_df.index[differences],
+        'VPD_Value': vpd_values[differences],
+        'SPD_Value': spd_values[differences],
+        'Difference': spd_values[differences] - vpd_values[differences]
+    })
+    
+    print(f"All differences for {column_name}:")
+    print(diff_df)
+    return diff_df
+
+# Example usage:
+if __name__ == "__main__":
+    # Replace with your actual file paths
+    vpd_file = "vpd_data.csv"  # Replace with your VPD file path
+    spd_file = "spd_data.csv"  # Replace with your SPD file path
+    
+    try:
+        # Run the comparison
+        results, summary = compare_dataframes(vpd_file, spd_file)
         
-        # Check if "Other Consumer" needs to be summed
-        if product_type == "Other Consumer":
-            other_consumer_val = merged_data[
-                (merged_data['Product_Map'] == 'Other Consumer') & 
-                (merged_data['Metric'] == template_actual.loc[idx, 'Metric'])
-            ][quarter].sum() if not merged_data[...].empty else 0
-            
-            personal_loans_val = merged_data[
-                (merged_data['Product_Map'] == 'Personal Instalment Loans') & 
-                (merged_data['Metric'] == template_actual.loc[idx, 'Metric'])
-            ][quarter].sum() if not merged_data[...].empty else 0
-            
-            template_actual.loc[idx, quarter] = other_consumer_val + personal_loans_val
+        # Save summary to CSV
+        summary.to_csv("comparison_summary.csv")
+        print(f"\nSummary saved to 'comparison_summary.csv'")
+        
+        # Example: Look at specific differences for one column
+        # find_specific_differences(vpd_file, spd_file, "fli_pd_q0")
+        
+    except FileNotFoundError as e:
+        print(f"File not found: {e}")
+        print("Please update the file paths in the script")
+    except Exception as e:
+        print(f"Error: {e}")
