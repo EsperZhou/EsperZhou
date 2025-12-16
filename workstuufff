@@ -4,26 +4,29 @@ metrics = [
     "Allowance for expected Credit Losses (S3)Stage 3",
 ]
 
-# pick quarter cols (choose one that matches your QA_result)
-qcols = [c for c in QA_result.columns if str(c).startswith("Q")]   # Q0..Q12
-# or if your cols are 0..12:
-# qcols = [c for c in QA_result.columns if isinstance(c, int)]
+# the quarter columns are numeric: 0, 1, ..., 12
+qcols = [c for c in QA_result.columns if isinstance(c, int)]
 
-sub = QA_result[QA_result["mapped_metric"].isin(metrics)].copy()
+for m in metrics:
+    # FCR Other Consumer row (source)
+    fcr_other = df_fcr_mx.loc[
+        (df_fcr_mx["mapped_metric"] == m) &
+        (df_fcr_mx["mapped_prd"] == "Other Consumer"),
+        qcols
+    ]
 
-ind_auto = (sub.loc[sub["mapped_prd"].eq("Indirect Auto"), ["mapped_metric"] + qcols]
-              .rename(columns={c: f"{c}_ind" for c in qcols}))
+    # QA_result Indirect Auto row (to subtract)
+    qa_ind = QA_result.loc[
+        (QA_result["mapped_metric"] == m) &
+        (QA_result["mapped_prd"] == "Indirect Auto"),
+        qcols
+    ]
 
-tmp = sub.merge(ind_auto, on="mapped_metric", how="left")
+    # update QA_result Other Consumer row
+    QA_result.loc[
+        (QA_result["mapped_metric"] == m) &
+        (QA_result["mapped_prd"] == "Other Consumer"),
+        qcols
+    ] = fcr_other.to_numpy() - qa_ind.to_numpy()
 
-mask_other = tmp["mapped_prd"].eq("Other Consumer")
-tmp.loc[mask_other, qcols] = (
-    tmp.loc[mask_other, qcols].to_numpy()
-    - tmp.loc[mask_other, [f"{c}_ind" for c in qcols]].to_numpy()
-)
-
-tmp = tmp.drop(columns=[f"{c}_ind" for c in qcols])
-
-# write back only those rows into QA_result
-QA_result.loc[QA_result["mapped_metric"].isin(metrics), :] = tmp.values
 
