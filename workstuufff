@@ -1,41 +1,29 @@
-def compare_columns_merge(df1, df2):
-    """Compare DataFrames column by column using merge."""
-    results = {}
-    
-    # Get all columns from both dataframes
-    all_cols = set(df1.columns) | set(df2.columns)
-    
-    for col in all_cols:
-        if col not in df1.columns or col not in df2.columns:
-            results[col] = False
-        else:
-            # Create temp dataframes with index and column
-            temp1 = df1[[col]].reset_index()
-            temp2 = df2[[col]].reset_index()
-            
-            # Convert to string for merge comparison
-            temp1[f'{col}_str'] = temp1[col].astype(str)
-            temp2[f'{col}_str'] = temp2[col].astype(str)
-            
-            # Merge and check if all rows match
-            merged = temp1.merge(temp2, on=['index', f'{col}_str'], how='outer', indicator=True)
-            results[col] = len(merged[merged['_merge'] != 'both']) == 0
-    
-    return results
+metrics = [
+    "Allowance for expected Credit Losses (S1)Stage 1",
+    "Allowance for expected Credit Losses (S2)Stage 2",
+    "Allowance for expected Credit Losses (S3)Stage 3",
+]
 
-def compare_dataframes_merge(df1, df2):
-    """Compare entire DataFrames using merge."""
-    # Quick checks
-    if df1.shape != df2.shape or list(df1.columns) != list(df2.columns):
-        return False
-    
-    # Convert to string and add row identifiers
-    df1_str = df1.astype(str).reset_index(drop=True)
-    df2_str = df2.astype(str).reset_index(drop=True)
-    
-    df1_str['_row_id'] = range(len(df1_str))
-    df2_str['_row_id'] = range(len(df2_str))
-    
-    # Merge and check
-    merged = df1_str.merge(df2_str, on=list(df1.columns) + ['_row_id'], how='outer', indicator=True)
-    return len(merged[merged['_merge'] != 'both']) == 0
+# pick quarter cols (choose one that matches your QA_result)
+qcols = [c for c in QA_result.columns if str(c).startswith("Q")]   # Q0..Q12
+# or if your cols are 0..12:
+# qcols = [c for c in QA_result.columns if isinstance(c, int)]
+
+sub = QA_result[QA_result["mapped_metric"].isin(metrics)].copy()
+
+ind_auto = (sub.loc[sub["mapped_prd"].eq("Indirect Auto"), ["mapped_metric"] + qcols]
+              .rename(columns={c: f"{c}_ind" for c in qcols}))
+
+tmp = sub.merge(ind_auto, on="mapped_metric", how="left")
+
+mask_other = tmp["mapped_prd"].eq("Other Consumer")
+tmp.loc[mask_other, qcols] = (
+    tmp.loc[mask_other, qcols].to_numpy()
+    - tmp.loc[mask_other, [f"{c}_ind" for c in qcols]].to_numpy()
+)
+
+tmp = tmp.drop(columns=[f"{c}_ind" for c in qcols])
+
+# write back only those rows into QA_result
+QA_result.loc[QA_result["mapped_metric"].isin(metrics), :] = tmp.values
+
